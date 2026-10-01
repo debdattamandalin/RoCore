@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+websockets
+zeroconf
+qrcode[pil]
+aiofiles
+python-multipart
+jinja2

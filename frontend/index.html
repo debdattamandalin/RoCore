@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- 
+      RoCore Frontend
+      Computer Science 2nd Year Project
+      This file handles the UI and talks to the FastAPI backend via WebSockets.
+    -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RoCore</title>
+    <!-- Using Tailwind CSS for easy styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        /* Basic font setup and scrollbar hiding */
+        body { font-family: 'Inter', sans-serif; }
+        .progress-bar { transition: width 0.2s ease; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-gray-50 md:h-screen md:overflow-hidden text-gray-900 relative flex flex-col font-sans">
+    
+    <!-- Header -->
+    <header class="flex-none px-6 md:px-10 py-5 flex justify-between items-center bg-white border-b border-gray-200 z-10">
+        <div class="flex items-center space-x-2.5">
+            <svg class="w-5 h-5 text-gray-900" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            <h1 class="text-lg font-semibold tracking-tight text-gray-900">RoCore</h1>
+        </div>
+        <div class="flex items-center space-x-3">
+            <span id="my-name" class="font-medium text-gray-600 text-sm"></span>
+            <span id="role-badge" class="hidden text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-semibold tracking-wider uppercase">Host</span>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 min-h-0 z-10 px-6 md:px-10 py-6 md:py-8 flex flex-col md:flex-row gap-6 mx-auto w-full max-w-6xl">
+        
+        <!-- Left: QR Code (Only show for Host) -->
+        <div id="qr-section" class="hidden md:w-80 flex-col bg-white p-8 rounded-2xl shadow-sm border border-gray-200 h-full overflow-hidden">
+            <h2 class="text-xs font-semibold tracking-wider text-gray-500 uppercase mb-8">Pair Device</h2>
+            <div class="flex-1 flex flex-col items-center justify-center w-full">
+                <div class="p-2 bg-white rounded-xl border border-gray-100 mb-6">
+                    <img id="qr-code" class="w-48 h-48" />
+                </div>
+                <a id="my-url" href="#" class="text-sm font-medium text-gray-500 hover:text-gray-800 transition break-all text-center"></a>
+            </div>
+        </div>
+
+        <!-- Right: Devices & Transfers -->
+        <div id="main-panel" class="w-full md:w-2/3 flex flex-col gap-6 min-h-0 h-full">
+            
+            <!-- Peers Section -->
+            <div class="flex-1 flex flex-col bg-white rounded-2xl p-6 md:p-8 border border-gray-200 shadow-sm min-h-0">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-xs font-semibold tracking-wider text-gray-500 uppercase">Nearby Devices</h2>
+                    <span class="relative flex h-2 w-2">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                    </span>
+                </div>
+                <div id="peers-list" class="flex-1 overflow-y-auto pr-2 space-y-1 scrollbar-hide">
+                    <div id="no-peers" class="flex flex-col items-center justify-center h-full text-gray-400">
+                        <p class="text-sm">Searching...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transfers Section -->
+            <div class="flex-1 flex flex-col bg-white rounded-2xl p-6 md:p-8 border border-gray-200 shadow-sm min-h-0">
+                <h2 class="text-xs font-semibold tracking-wider text-gray-500 uppercase mb-6">Transfers</h2>
+                <div id="transfers-list" class="flex-1 overflow-y-auto pr-2 space-y-2 scrollbar-hide">
+                    <div id="no-transfers" class="flex flex-col items-center justify-center h-full text-gray-400">
+                        <p class="text-sm">No active transfers</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="flex-none py-4 px-6 text-center border-t border-gray-200 bg-gray-50/80 z-10">
+        <p class="text-xs text-gray-400 font-medium tracking-wide uppercase">
+            RoCore <span class="mx-2">&bull;</span> Remote Core Communication
+        </p>
+    </footer>
+
+    <!-- Hidden File Input -->
+    <input type="file" id="file-input" class="hidden" multiple>
+
+    <script>
+        // Global variables to keep track of state
+        let myInfo = {};
+        let selectedPeer = null;
+        let activeTransfers = {};
+        
+        // Generate a random ID for this browser tab so the server knows who we are
+        let clientId = localStorage.getItem('rocore_client_id');
+        if (!clientId) {
+            clientId = 'Browser-' + Math.random().toString(36).substr(2, 9);
+            localStorage.setItem('rocore_client_id', clientId);
+        }
+
+        // Set a default device name (Phone or Laptop)
+        let myDeviceName = localStorage.getItem('rocore_device_name');
+        if (!myDeviceName) {
+            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+            myDeviceName = isMobile ? 'Mobile Phone' : 'Laptop Browser';
+            localStorage.setItem('rocore_device_name', myDeviceName);
+        }
+
+        // Fetch info from the server about who we are
+        async function fetchMe() {
+            try {
+                const res = await fetch('/api/me');
+                myInfo = await res.json();
+                
+                const badge = document.getElementById('role-badge');
+                badge.classList.remove('hidden');
+
+                // If we are on the laptop, show the QR code
+                if (myInfo.is_host_browser) {
+                    document.getElementById('my-name').textContent = myInfo.name;
+                    badge.textContent = "Host";
+                    
+                    const qrSection = document.getElementById('qr-section');
+                    qrSection.classList.remove('hidden');
+                    qrSection.classList.add('flex');
+                    
+                    document.getElementById('my-url').textContent = myInfo.url;
+                    document.getElementById('my-url').href = myInfo.url;
+                    document.getElementById('qr-code').src = `data:image/png;base64,${myInfo.qr}`;
+                } else {
+                    // If we are on a phone, just show we are a client and take full width
+                    document.getElementById('my-name').textContent = myDeviceName;
+                    badge.textContent = "Client";
+                    document.getElementById('main-panel').classList.remove('md:w-2/3');
+                    document.getElementById('main-panel').classList.add('w-full');
+                }
+            } catch (err) {
+                console.error("Error fetching my info:", err);
+            }
+        }
+
+        function getDeviceIcon(isWebClient, isHost) {
+            if (isWebClient) {
+                if (isHost) {
+                    return `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                            </svg>`;
+                }
+                return `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                        </svg>`;
+            }
+            return `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>`;
+        }
+
+        function getTransferIcon(direction) {
+            if (direction === 'incoming') {
+                return `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                        </svg>`;
+            }
+            return `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                    </svg>`;
+        }
+
+        function renderPeers(peers) {
+            const list = document.getElementById('peers-list');
+            const noPeers = document.getElementById('no-peers');
+            
+            const otherPeers = peers.filter(p => {
+                if (myInfo.is_host_browser && p.addresses && p.addresses.includes(myInfo.ip)) return false;
+                if (myInfo.is_host_browser && p.client_id === 'SERVER') return false;
+                if (p.client_id === clientId) return false;
+                return true;
+            });
+
+            // Deduplicate peers by name (e.g. Host mDNS + Host WS + SERVER)
+            const uniquePeers = [];
+            const seenNames = new Set();
+            
+            // Prioritize the canonical SERVER peer
+            otherPeers.forEach(p => {
+                if (p.client_id === 'SERVER') {
+                    uniquePeers.push(p);
+                    seenNames.add(p.name);
+                }
+            });
+            
+            otherPeers.forEach(p => {
+                if (p.client_id !== 'SERVER' && !seenNames.has(p.name)) {
+                    uniquePeers.push(p);
+                    seenNames.add(p.name);
+                }
+            });
+
+            if (uniquePeers.length === 0) {
+                noPeers.style.display = 'flex';
+                Array.from(list.children).forEach(child => {
+                    if (child.id !== 'no-peers') list.removeChild(child);
+                });
+                return;
+            }
+
+            noPeers.style.display = 'none';
+
+            const existingPeerIds = Array.from(list.children).map(c => c.id).filter(id => id !== 'no-peers');
+            const currentPeerIds = uniquePeers.map(p => `peer-${p.client_id || p.name}`);
+
+            existingPeerIds.forEach(id => {
+                if (!currentPeerIds.includes(id)) {
+                    const el = document.getElementById(id);
+                    if (el) el.remove();
+                }
+            });
+
+            uniquePeers.forEach(peer => {
+                let targetUrl = '';
+                let targetClientId = '';
+                let subtitle = '';
+                
+                if (peer.is_web_client) {
+                    targetUrl = window.location.origin;
+                    targetClientId = peer.client_id;
+                    subtitle = peer.is_host ? 'Host' : 'Client';
+                } else {
+                    targetUrl = `http://${peer.addresses[0]}:${peer.port}`;
+                    subtitle = 'Network peer';
+                }
+
+                const peerDivId = `peer-${peer.client_id || peer.name}`;
+                
+                if (!document.getElementById(peerDivId)) {
+                    const div = document.createElement('div');
+                    div.id = peerDivId;
+                    div.className = 'flex items-center justify-between py-3 px-4 hover:bg-gray-50 rounded-xl transition duration-150';
+                    
+                    const iconSvg = getDeviceIcon(peer.is_web_client, peer.is_host);
+
+                    div.innerHTML = `
+                        <div class="flex items-center space-x-3">
+                            <div class="w-10 h-10 flex items-center justify-center bg-gray-100 text-gray-500 rounded-full">
+                                ${iconSvg}
+                            </div>
+                            <div>
+                                <h3 class="font-medium text-gray-900 text-sm leading-snug">${peer.name}</h3>
+                                <p class="text-xs text-gray-500 mt-0.5">${subtitle}</p>
+                            </div>
+                        </div>
+                        <button class="bg-white border border-gray-200 text-gray-900 hover:bg-gray-50 hover:border-gray-300 px-4 py-1.5 rounded-lg text-sm font-medium transition shadow-sm"
+                                onclick="triggerFileSelect('${targetUrl}', '${peer.name}', '${targetClientId}')">
+                            Send
+                        </button>
+                    `;
+                    list.appendChild(div);
+                }
+            });
+        }
+
+        let ws;
+        function connectWebSocket() {
+            ws = new WebSocket(`ws://${window.location.host}/ws`);
+            
+            ws.onopen = () => {
+                ws.send(JSON.stringify({
+                    type: 'register',
+                    client_id: clientId,
+                    device_name: myInfo.is_host_browser ? myInfo.name : myDeviceName,
+                    is_host: !!myInfo.is_host_browser
+                }));
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'peers_update') {
+                    renderPeers(data.peers);
+                } else if (data.type === 'transfer_start') {
+                    addTransferUI(data.transfer_id, data.filename, data.sender, data.direction, data.total_size);
+                } else if (data.type === 'transfer_progress') {
+                    updateTransferUI(data.transfer_id, data.downloaded, data.total_size);
+                } else if (data.type === 'transfer_complete') {
+                    completeTransferUI(data.transfer_id);
+                } else if (data.type === 'transfer_error') {
+                    errorTransferUI(data.transfer_id, data.error);
+                } else if (data.type === 'file_offer') {
+                    triggerDownload(data.url, data.filename, data.sender);
+                }
+            };
+
+            ws.onclose = () => {
+                setTimeout(connectWebSocket, 2000);
+            };
+        }
+        
+        function triggerDownload(url, filename, senderName) {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        const fileInput = document.getElementById('file-input');
+        
+        function triggerFileSelect(targetUrl, targetName, targetClientId) {
+            selectedPeer = { url: targetUrl, name: targetName, clientId: targetClientId };
+            fileInput.click();
+        }
+
+        fileInput.addEventListener('change', async (e) => {
+            const files = e.target.files;
+            if (!files.length || !selectedPeer) return;
+
+            for (let i = 0; i < files.length; i++) {
+                await uploadFile(files[i], selectedPeer.url, selectedPeer.name, selectedPeer.clientId);
+            }
+            fileInput.value = '';
+        });
+
+        async function uploadFile(file, targetUrl, targetName, targetClientId) {
+            const fileId = file.name + '-' + file.size + '-' + file.lastModified;
+            const CHUNK_SIZE = 5 * 1024 * 1024;
+            
+            addTransferUI(fileId, file.name, targetName, 'outgoing', file.size);
+
+            let offset = 0;
+            try {
+                const statusRes = await fetch(`${targetUrl}/api/upload/status?file_id=${encodeURIComponent(fileId)}`);
+                if (statusRes.ok) {
+                    const statusData = await statusRes.json();
+                    offset = statusData.uploaded_bytes || 0;
+                }
+            } catch (err) {}
+
+            while (offset < file.size) {
+                const chunk = file.slice(offset, offset + CHUNK_SIZE);
+                const formData = new FormData();
+                formData.append('file_id', fileId);
+                formData.append('filename', file.name);
+                formData.append('sender_name', myInfo.is_host_browser ? myInfo.name : myDeviceName);
+                formData.append('total_size', file.size);
+                formData.append('offset', offset);
+                formData.append('target_client_id', targetClientId || '');
+                formData.append('file', chunk);
+
+                try {
+                    const res = await fetch(`${targetUrl}/api/upload`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    if (!res.ok) throw new Error("Upload failed");
+                    offset += chunk.size;
+                    updateTransferUI(fileId, offset, file.size);
+                } catch (err) {
+                    errorTransferUI(fileId, "Connection lost");
+                    return;
+                }
+            }
+            completeTransferUI(fileId);
+        }
+
+        function addTransferUI(id, filename, peerName, direction, totalSize) {
+            const list = document.getElementById('transfers-list');
+            document.getElementById('no-transfers').style.display = 'none';
+
+            if (document.getElementById(`transfer-${id}`)) return;
+
+            const div = document.createElement('div');
+            div.id = `transfer-${id}`;
+            div.className = 'p-4 bg-gray-50 rounded-xl border border-gray-100 mb-2 transition-all';
+            
+            const iconSvg = getTransferIcon(direction);
+            const text = direction === 'incoming' ? `From ${peerName}` : `To ${peerName}`;
+
+            div.innerHTML = `
+                <div class="flex justify-between items-center mb-3">
+                    <div class="flex items-center space-x-3 w-[70%]">
+                        <div class="w-8 h-8 flex items-center justify-center text-gray-500 bg-white rounded-lg shadow-sm border border-gray-200 flex-shrink-0">
+                            ${iconSvg}
+                        </div>
+                        <div class="overflow-hidden w-full">
+                            <h4 class="font-medium text-gray-900 text-sm truncate" title="${filename}">${filename}</h4>
+                            <p class="text-xs text-gray-500 mt-0.5 truncate">${text}</p>
+                        </div>
+                    </div>
+                    <span id="progress-text-${id}" class="text-xs font-medium text-gray-600">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-1 overflow-hidden">
+                    <div id="progress-bar-${id}" class="bg-gray-900 h-full rounded-full progress-bar" style="width: 0%"></div>
+                </div>
+                <div class="mt-2 text-right">
+                    <span id="status-${id}" class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Transferring</span>
+                </div>
+            `;
+            list.prepend(div);
+        }
+
+        function updateTransferUI(id, downloaded, totalSize) {
+            const bar = document.getElementById(`progress-bar-${id}`);
+            const text = document.getElementById(`progress-text-${id}`);
+            if (bar && text && totalSize > 0) {
+                const percent = Math.min(100, Math.round((downloaded / totalSize) * 100));
+                bar.style.width = `${percent}%`;
+                text.textContent = `${percent}%`;
+            }
+        }
+
+        function completeTransferUI(id) {
+            const bar = document.getElementById(`progress-bar-${id}`);
+            const status = document.getElementById(`status-${id}`);
+            if (bar) {
+                bar.style.width = `100%`;
+                bar.classList.replace('bg-gray-900', 'bg-green-500');
+            }
+            if (status) {
+                status.textContent = 'Completed';
+                status.classList.add('text-green-600');
+            }
+        }
+
+        function errorTransferUI(id, errMsg) {
+            const bar = document.getElementById(`progress-bar-${id}`);
+            const status = document.getElementById(`status-${id}`);
+            if (bar) {
+                bar.classList.replace('bg-gray-900', 'bg-red-500');
+            }
+            if (status) {
+                status.textContent = errMsg || 'Failed';
+                status.classList.add('text-red-600');
+            }
+        }
+
+        (async () => {
+            await fetchMe();
+            connectWebSocket();
+        })();
+    </script>
+</body>
+</html>
