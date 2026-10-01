@@ -171,7 +171,7 @@ async def shutdown_event():
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     # Serve the main frontend UI
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html", {"request": request})
 
 @app.get("/api/me")
 async def get_me(request: Request):
